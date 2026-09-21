@@ -172,8 +172,9 @@ EOF
             if [ "$enable_hop" = "y" ] || [ "$enable_hop" = "Y" ]; then
                 read -p "$(echo -e "${PINK}请输入跳跃端口范围的起始端口 (例如 20000): ${RESET}")" START_PORT
                 read -p "$(echo -e "${PINK}请输入跳跃端口范围的结束端口 (例如 40000): ${RESET}")" END_PORT
+                read -p "$(echo -e "${PINK}请输入目标端口 (例如 9443): ${RESET}")" TARGET_PORT
 
-                if [[ ! "$START_PORT" =~ ^[0-9]+$ || ! "$END_PORT" =~ ^[0-9]+$ ]]; then
+                if [[ ! "$START_PORT" =~ ^[0-9]+$ || ! "$END_PORT" =~ ^[0-9]+$ || ! "$TARGET_PORT" =~ ^[0-9]+$ ]]; then
                     echo -e "${PINK}输入无效，端口必须为数字。${RESET}"
                     exit 1
                 fi
@@ -185,13 +186,13 @@ EOF
 
                 # 清除可能存在的旧 REDIRECT 规则，防止重复追加
                 echo "清除已有的相同端口跳跃规则..."
-                iptables -t nat -D PREROUTING -p udp --dport "$START_PORT:$END_PORT" -j REDIRECT --to-port "$port" 2>/dev/null
-                ip6tables -t nat -D PREROUTING -p udp --dport "$START_PORT:$END_PORT" -j REDIRECT --to-port "$port" 2>/dev/null
+                iptables -t nat -D PREROUTING -p udp --dport "$START_PORT:$END_PORT" -j REDIRECT --to-port "$TARGET_PORT" 2>/dev/null
+                ip6tables -t nat -D PREROUTING -p udp --dport "$START_PORT:$END_PORT" -j REDIRECT --to-port "$TARGET_PORT" 2>/dev/null
 
                 # 设置 IPv4 与 IPv6 端口跳跃规则
-                echo "设置端口跳跃规则 ($START_PORT-$END_PORT -> $port)..."
-                iptables -t nat -A PREROUTING -p udp --dport "$START_PORT:$END_PORT" -j REDIRECT --to-port "$port"
-                ip6tables -t nat -A PREROUTING -p udp --dport "$START_PORT:$END_PORT" -j REDIRECT --to-port "$port" 2>/dev/null
+                echo "设置端口跳跃规则 ($START_PORT-$END_PORT -> $TARGET_PORT)..."
+                iptables -t nat -A PREROUTING -p udp --dport "$START_PORT:$END_PORT" -j REDIRECT --to-port "$TARGET_PORT"
+                ip6tables -t nat -A PREROUTING -p udp --dport "$START_PORT:$END_PORT" -j REDIRECT --to-port "$TARGET_PORT" 2>/dev/null
 
                 # 保存规则至 Alpine 规则文件并加入自启
                 echo "保存 iptables 规则..."
