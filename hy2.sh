@@ -20,6 +20,34 @@ install_dependencies() {
     fi
 }
 
+# 检查并自动补全 iptables 相关持久化插件
+check_and_install_iptables_tools() {
+    echo -e "${GREEN}正在检查 iptables 及持久化支持组件...${RESET}"
+    
+    # 检查核心工具是否存在
+    local missing_pkgs=""
+    if ! command -v iptables &> /dev/null; then
+        missing_pkgs="$missing_pkgs iptables"
+    fi
+    if ! command -v ip6tables &> /dev/null; then
+        missing_pkgs="$missing_pkgs ip6tables"
+    fi
+    
+    # 如果有缺失的组件，自动通过 apk 安装
+    if [ -n "$missing_pkgs" ]; then
+        echo -e "${PINK}检测到缺少必要防火墙组件:$missing_pkgs，正在自动安装...${RESET}"
+        apk add --no-cache iptables ip6tables
+    fi
+    
+    # 确保 iptables 的 OpenRC 服务脚本存在（用于 rc-service iptables save）
+    if [ ! -f /etc/init.d/iptables ]; then
+        echo -e "${PINK}未检测到 iptables 服务脚本，正在尝试重新安装 iptables-openrc...${RESET}"
+        apk add --no-cache iptables-openrc ip6tables-openrc 2>/dev/null || true
+    fi
+    
+    echo -e "${GREEN}防火墙组件检查与安装完成。${RESET}"
+}
+
 # 生成随机 Gmail 邮箱地址
 generate_random_email() {
     local length=10
@@ -170,6 +198,9 @@ EOF
             # 配置端口跳跃 (使用 REDIRECT 模式)
             read -p "$(echo -e "${PINK}是否配置端口跳跃？(y/n): ${RESET}")" enable_hop
             if [ "$enable_hop" = "y" ] || [ "$enable_hop" = "Y" ]; then
+                # 在配置端口跳跃前，自动检查并补全 iptables 相关插件
+                check_and_install_iptables_tools
+
                 read -p "$(echo -e "${PINK}请输入跳跃端口范围的起始端口 (例如 20000): ${RESET}")" START_PORT
                 read -p "$(echo -e "${PINK}请输入跳跃端口范围的结束端口 (例如 40000): ${RESET}")" END_PORT
                 read -p "$(echo -e "${PINK}请输入目标端口 (例如 9443): ${RESET}")" TARGET_PORT
