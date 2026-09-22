@@ -103,7 +103,7 @@ EOF
 # 主菜单循环
 while true; do
     echo -e "${GREEN}====================================${RESET}"
-    echo -e "${GREEN}      Hysteria 2 - Alpine Linux     ${RESET}"
+    echo -e "${GREEN}    Hysteria 2 - Alpine Linux       ${RESET}"
     echo -e "${GREEN}====================================${RESET}"
     echo -e "${GREEN}1) 域名证书安装 Hysteria${RESET}"
     echo -e "${GREEN}2) 修改 Hysteria 配置${RESET}"
@@ -215,20 +215,21 @@ EOF
                     exit 1
                 fi
 
-                # 清除可能存在的旧 REDIRECT 规则，防止重复追加
-                echo "清除已有的相同端口跳跃规则..."
-                iptables -t nat -D PREROUTING -p udp --dport "$START_PORT:$END_PORT" -j REDIRECT --to-port "$TARGET_PORT" 2>/dev/null
-                ip6tables -t nat -D PREROUTING -p udp --dport "$START_PORT:$END_PORT" -j REDIRECT --to-port "$TARGET_PORT" 2>/dev/null
+                # 清除旧的转发规则，防止规则重复堆叠
+                echo -e "${GREEN}正在清除旧的 NAT 转发规则...${RESET}"
+                iptables -t nat -F PREROUTING 2>/dev/null
+                ip6tables -t nat -F PREROUTING 2>/dev/null
 
                 # 设置 IPv4 与 IPv6 端口跳跃规则
-                echo "设置端口跳跃规则 ($START_PORT-$END_PORT -> $TARGET_PORT)..."
+                echo -e "${GREEN}设置端口跳跃规则 ($START_PORT-$END_PORT -> $TARGET_PORT)...${RESET}"
                 iptables -t nat -A PREROUTING -p udp --dport "$START_PORT:$END_PORT" -j REDIRECT --to-port "$TARGET_PORT"
                 ip6tables -t nat -A PREROUTING -p udp --dport "$START_PORT:$END_PORT" -j REDIRECT --to-port "$TARGET_PORT" 2>/dev/null
 
                 # 保存规则至 Alpine 规则文件并加入自启
-                echo "保存 iptables 规则..."
+                echo -e "${GREEN}正在保存 iptables 规则并设置开机自启...${RESET}"
                 rc-service iptables save 2>/dev/null
                 rc-service ip6tables save 2>/dev/null
+                
                 rc-update add iptables default 2>/dev/null
                 rc-update add ip6tables default 2>/dev/null
 
