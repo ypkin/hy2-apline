@@ -81,6 +81,32 @@ EOF
     chmod +x /etc/init.d/hysteria-server
 }
 
+# 写入独立的 hysteria 二进制安装/更新脚本（供菜单安装、手动更新、定时更新共用）
+# 官方 get.hy2.sh 只支持 systemd 且依赖 grep -P / useradd，在 Alpine 上不可用，
+# 这里改为从 GitHub release 直接下载对应架构的二进制文件
+setup_hy2_installer() {
+    cat > /usr/local/bin/hy2-install.sh << 'EOF'
+#!/bin/bash
+ARCH=$(uname -m)
+case "$ARCH" in
+    x86_64) ARCH="amd64" ;;
+    aarch64|arm64) ARCH="arm64" ;;
+    armv7l|armv6l) ARCH="arm" ;;
+    *) echo "不支持的架构: $(uname -m)" >&2; exit 1 ;;
+esac
+VER=$(curl -fsSL https://api.github.com/repos/apernet/hysteria/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+if [ -z "$VER" ]; then
+    echo "获取 Hysteria 最新版本失败，请检查网络（GitHub 需要 IPv4，纯 IPv6 机器请先装 WARP）。" >&2
+    exit 1
+fi
+echo "最新版本: $VER"
+curl -fsSL -o /usr/local/bin/hysteria "https://github.com/apernet/hysteria/releases/download/${VER}/hysteria-linux-${ARCH}" || exit 1
+chmod +x /usr/local/bin/hysteria
+echo "Hysteria $VER 安装完成。"
+EOF
+    chmod +x /usr/local/bin/hy2-install.sh
+}
+
 # 配置定时自动检查更新
 setup_auto_update() {
     echo -e "${GREEN}配置每周自动更新任务...${RESET}"
@@ -89,8 +115,7 @@ setup_auto_update() {
 
     cat > /usr/local/bin/hy2-autoupdate.sh << 'EOF'
 #!/bin/bash
-bash <(curl -fsSL https://get.hy2.sh/)
-rc-service hysteria-server restart
+/usr/local/bin/hy2-install.sh && rc-service hysteria-server restart
 EOF
     chmod +x /usr/local/bin/hy2-autoupdate.sh
 
@@ -121,6 +146,7 @@ while true; do
     case $option in
         1)
             install_dependencies
+            setup_hy2_installer
             random_email=$(generate_random_email)
 
             read -p "$(echo -e "${PINK}输入解析好的域名 (例如 ${GREEN}example.com${RESET}): ${RESET}")" domain
@@ -131,9 +157,9 @@ while true; do
             read -sp "$(echo -e "${PINK}输入您希望的密码 (输入将被隐藏): ${RESET}")" password
             echo
 
-            # 下载官方二进制程序
+            # 下载 hysteria 二进制程序（直接从 GitHub release 获取）
             echo -e "${GREEN}正在下载并安装 Hysteria...${RESET}"
-            if ! bash <(curl -fsSL https://get.hy2.sh/); then
+            if ! /usr/local/bin/hy2-install.sh; then
                 echo -e "${PINK}安装 Hysteria 失败，退出中...${RESET}"
                 exit 1
             fi
@@ -300,7 +326,8 @@ EOF
 
         8)
             echo -e "${GREEN}正在检查并更新 Hysteria 核心...${RESET}"
-            bash <(curl -fsSL https://get.hy2.sh/)
+            setup_hy2_installer
+            /usr/local/bin/hy2-install.sh
             rc-service hysteria-server restart
             echo -e "${GREEN}更新完成，服务已重启！${RESET}"
             echo -e "${GREEN}按任意键返回主菜单...${RESET}"
@@ -314,6 +341,7 @@ EOF
             rm -f /etc/init.d/hysteria-server
             rm -rf /etc/hysteria/
             rm -f /usr/local/bin/hysteria
+            rm -f /usr/local/bin/hy2-install.sh
             rm -f /usr/local/bin/hy2-autoupdate.sh
             rm -f /var/log/hysteria.log /var/log/hysteria.err
             crontab -l 2>/dev/null | grep -v "hy2-autoupdate.sh" | crontab -
