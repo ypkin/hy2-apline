@@ -14,7 +14,7 @@ fi
 # 安装必要依赖组件（含 iptables/ip6tables 持久化组件与运行依赖）
 install_dependencies() {
     echo -e "${GREEN}正在更新软件源并安装依赖组件...${RESET}"
-    if ! apk update && apk add --no-cache curl socat wget iptables ip6tables bash nano tzdata ca-certificates; then
+    if ! apk update || ! apk add --no-cache curl socat wget iptables ip6tables bash nano tzdata ca-certificates; then
         echo -e "${PINK}安装组件失败，请检查网络设置。${RESET}"
         exit 1
     fi
@@ -23,7 +23,7 @@ install_dependencies() {
 # 检查并自动补全 iptables 相关持久化插件
 check_and_install_iptables_tools() {
     echo -e "${GREEN}正在检查 iptables 及持久化支持组件...${RESET}"
-    
+
     # 检查核心工具是否存在
     local missing_pkgs=""
     if ! command -v iptables &> /dev/null; then
@@ -32,19 +32,19 @@ check_and_install_iptables_tools() {
     if ! command -v ip6tables &> /dev/null; then
         missing_pkgs="$missing_pkgs ip6tables"
     fi
-    
+
     # 如果有缺失的组件，自动通过 apk 安装
     if [ -n "$missing_pkgs" ]; then
         echo -e "${PINK}检测到缺少必要防火墙组件:$missing_pkgs，正在自动安装...${RESET}"
         apk add --no-cache iptables ip6tables
     fi
-    
+
     # 确保 iptables 的 OpenRC 服务脚本存在（用于 rc-service iptables save）
     if [ ! -f /etc/init.d/iptables ]; then
         echo -e "${PINK}未检测到 iptables 服务脚本，正在尝试重新安装 iptables-openrc...${RESET}"
         apk add --no-cache iptables-openrc ip6tables-openrc 2>/dev/null || true
     fi
-    
+
     echo -e "${GREEN}防火墙组件检查与安装完成。${RESET}"
 }
 
@@ -229,7 +229,7 @@ EOF
                 echo -e "${GREEN}正在保存 iptables 规则并设置开机自启...${RESET}"
                 rc-service iptables save 2>/dev/null
                 rc-service ip6tables save 2>/dev/null
-                
+
                 rc-update add iptables default 2>/dev/null
                 rc-update add ip6tables default 2>/dev/null
 
