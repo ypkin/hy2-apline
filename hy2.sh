@@ -60,16 +60,18 @@ generate_random_email() {
 }
 
 # 配置 OpenRC 服务
+# 修复：改用 supervise-daemon 跟踪进程。旧写法 command_background + pidfile
+# 在 hysteria 这类不写 pidfile 的常驻进程上经常对不上，会出现"进程在跑
+# 但 rc-service status 显示 crashed"的情况。
 setup_openrc_service() {
     cat > /etc/init.d/hysteria-server << 'EOF'
 #!/sbin/openrc-run
 
 name="hysteria-server"
 description="Hysteria 2 Server Service"
+supervisor=supervise-daemon
 command="/usr/local/bin/hysteria"
 command_args="server --config /etc/hysteria/config.yaml"
-command_background="yes"
-pidfile="/run/${RC_SVCNAME}.pid"
 output_log="/var/log/hysteria.log"
 error_log="/var/log/hysteria.err"
 
@@ -169,6 +171,8 @@ while true; do
             rc-update add hysteria-server default
 
             # 生成配置文件
+            # 修复：密码用 $(printf '%s' ...) 写入，含 $、反引号、反斜杠的密码
+            # 不会被 heredoc 的 shell 展开吃掉，原样写入 YAML
             mkdir -p /etc/hysteria
             echo -e "${GREEN}正在写入配置到 /etc/hysteria/config.yaml...${RESET}"
             cat > /etc/hysteria/config.yaml <<EOF
@@ -181,7 +185,7 @@ acme:
 
 auth:
   type: password
-  password: $password
+  password: $(printf '%s' "$password")
 
 masquerade:
   type: proxy
@@ -344,6 +348,11 @@ EOF
             rm -f /usr/local/bin/hy2-install.sh
             rm -f /usr/local/bin/hy2-autoupdate.sh
             rm -f /var/log/hysteria.log /var/log/hysteria.err
+            # 修复：卸载时同步清除端口跳跃的 NAT 规则并保存
+            iptables -t nat -F PREROUTING 2>/dev/null
+            ip6tables -t nat -F PREROUTING 2>/dev/null
+            rc-service iptables save 2>/dev/null
+            rc-service ip6tables save 2>/dev/null
             crontab -l 2>/dev/null | grep -v "hy2-autoupdate.sh" | crontab -
             echo -e "${GREEN}Hysteria 已成功完全卸载！${RESET}"
             echo -e "${GREEN}按任意键返回主菜单...${RESET}"
