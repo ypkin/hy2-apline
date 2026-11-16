@@ -96,14 +96,17 @@ case "$ARCH" in
     armv7l|armv6l) ARCH="arm" ;;
     *) echo "不支持的架构: $(uname -m)" >&2; exit 1 ;;
 esac
-VER=$(curl -fsSL https://api.github.com/repos/apernet/hysteria/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+VER=$(curl -fsSL https://api.github.com/repos/HyNetworks/hysteria/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
 if [ -z "$VER" ]; then
     echo "获取 Hysteria 最新版本失败，请检查网络（GitHub 需要 IPv4，纯 IPv6 机器请先装 WARP）。" >&2
     exit 1
 fi
 echo "最新版本: $VER"
-curl -fsSL -o /usr/local/bin/hysteria "https://github.com/apernet/hysteria/releases/download/${VER}/hysteria-linux-${ARCH}" || exit 1
-chmod +x /usr/local/bin/hysteria
+TMP=/usr/local/bin/hysteria.new
+curl -fsSL -o "$TMP" "https://github.com/HyNetworks/hysteria/releases/download/${VER}/hysteria-linux-${ARCH}" || exit 1
+chmod +x "$TMP"
+"$TMP" version >/dev/null 2>&1 || { echo "新二进制校验失败" >&2; rm -f "$TMP"; exit 1; }
+mv "$TMP" /usr/local/bin/hysteria
 echo "Hysteria $VER 安装完成。"
 EOF
     chmod +x /usr/local/bin/hy2-install.sh
@@ -111,7 +114,7 @@ EOF
 
 # 配置定时自动检查更新
 setup_auto_update() {
-    echo -e "${GREEN}配置每周自动更新任务...${RESET}"
+    echo -e "${GREEN}配置每日自动更新任务...${RESET}"
     rc-update add crond default >/dev/null 2>&1
     rc-service crond start >/dev/null 2>&1
 
@@ -121,9 +124,9 @@ setup_auto_update() {
 EOF
     chmod +x /usr/local/bin/hy2-autoupdate.sh
 
-    # 每周一凌晨 3:30 自动检查并更新二进制文件
+    # 每天凌晨 04:00 自动检查并更新二进制文件
     if ! crontab -l 2>/dev/null | grep -q "hy2-autoupdate.sh"; then
-        (crontab -l 2>/dev/null; echo "30 3 * * 1 /usr/local/bin/hy2-autoupdate.sh >/dev/null 2>&1") | crontab -
+        (crontab -l 2>/dev/null; echo "0 4 * * * /usr/local/bin/hy2-autoupdate.sh >/dev/null 2>&1") | crontab -
     fi
 }
 
