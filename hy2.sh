@@ -96,16 +96,13 @@ case "$ARCH" in
     armv7l|armv6l) ARCH="arm" ;;
     *) echo "不支持的架构: $(uname -m)" >&2; exit 1 ;;
 esac
-VER=$(curl -fsSL https://api.github.com/repos/HyNetworks/hysteria/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-if [ -z "$VER" ]; then
-    echo "获取 Hysteria 最新版本失败，请检查网络（GitHub 需要 IPv4，纯 IPv6 机器请先装 WARP）。" >&2
-    exit 1
-fi
-echo "最新版本: $VER"
+URL="https://download.hysteria.network/app/latest/hysteria-linux-${ARCH}"
 TMP=/usr/local/bin/hysteria.new
-curl -fsSL -o "$TMP" "https://github.com/HyNetworks/hysteria/releases/download/${VER}/hysteria-linux-${ARCH}" || exit 1
+echo "下载最新版本: $URL"
+curl -fsSL -o "$TMP" "$URL" || { echo "下载失败" >&2; rm -f "$TMP"; exit 1; }
 chmod +x "$TMP"
-"$TMP" version >/dev/null 2>&1 || { echo "新二进制校验失败" >&2; rm -f "$TMP"; exit 1; }
+VER=$("$TMP" version 2>/dev/null | grep -i '^Version' | awk '{print $2}')
+[ -n "$VER" ] || { echo "新二进制校验失败" >&2; rm -f "$TMP"; exit 1; }
 mv "$TMP" /usr/local/bin/hysteria
 echo "Hysteria $VER 安装完成。"
 EOF
