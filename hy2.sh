@@ -274,6 +274,17 @@ while true; do
             read -sp "$(echo -e "${PINK}输入您希望的密码 (输入将被隐藏): ${RESET}")" password
             echo
 
+            # 流量混淆 obfs（可选）：启用后客户端需填相同的混淆类型与密码才能连接
+            read -p "$(echo -e "${PINK}是否启用流量混淆 obfs？(y/n): ${RESET}")" enable_obfs
+            obfs_type=""
+            obfs_password=""
+            if [ "$enable_obfs" = "y" ] || [ "$enable_obfs" = "Y" ]; then
+                read -p "$(echo -e "${PINK}混淆类型 (gecko/salamander，直接回车默认 gecko): ${RESET}")" obfs_type
+                obfs_type=${obfs_type:-gecko}
+                read -sp "$(echo -e "${PINK}输入混淆密码 (输入将被隐藏): ${RESET}")" obfs_password
+                echo
+            fi
+
             # 下载 hysteria 二进制程序（直接从 GitHub release 获取）
             echo -e "${GREEN}正在下载并安装 Hysteria...${RESET}"
             if ! /usr/local/bin/hy2-install.sh; then
@@ -339,6 +350,18 @@ acl:
 EOF
 
             echo -e "${GREEN}Hysteria 配置已写入到 /etc/hysteria/config.yaml${RESET}"
+
+            # 启用了 obfs 时把混淆段追加到配置末尾（密码同样防 shell 展开原样写入）
+            if [ -n "$obfs_type" ]; then
+                cat >> /etc/hysteria/config.yaml <<EOF
+
+obfs:
+  type: $obfs_type
+  $obfs_type:
+    password: $(printf '%s' "$obfs_password")
+EOF
+                echo -e "${GREEN}已启用 obfs 混淆（类型 $obfs_type），客户端需填相同的混淆密码。${RESET}"
+            fi
 
             # 配置端口跳跃 (使用 REDIRECT 模式)
             read -p "$(echo -e "${PINK}是否配置端口跳跃？(y/n): ${RESET}")" enable_hop
@@ -441,15 +464,16 @@ EOF
             echo -e "${PINK}正在卸载 Hysteria...${RESET}"
             rc-service hysteria-server stop 2>/dev/null
             rc-update del hysteria-server default 2>/dev/null
+            # 先清端口跳跃规则再删配置：delete_hop_rules 要读配置里的监听端口来定位规则，
+            # 配置先删掉就只能靠默认 9443 兜底，非 9443 的机器会漏删跳跃规则
+            delete_hop_rules
+            save_iptables_rules
             rm -f /etc/init.d/hysteria-server
             rm -rf /etc/hysteria/
             rm -f /usr/local/bin/hysteria
             rm -f /usr/local/bin/hy2-install.sh
             rm -f /usr/local/bin/hy2-autoupdate.sh
             rm -f /var/log/hysteria.log /var/log/hysteria.err
-            # 卸载时同步清除端口跳跃规则（只删 hy2 的 REDIRECT，不动其他 NAT 规则）并保存
-            delete_hop_rules
-            save_iptables_rules
             crontab -l 2>/dev/null | grep -v "hy2-autoupdate.sh" | crontab -
             echo -e "${GREEN}Hysteria 已成功完全卸载！${RESET}"
             echo -e "${GREEN}按任意键返回主菜单...${RESET}"
