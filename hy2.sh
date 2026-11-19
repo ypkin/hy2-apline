@@ -48,6 +48,120 @@ check_and_install_iptables_tools() {
     echo -e "${GREEN}防火墙组件检查与安装完成。${RESET}"
 }
 
+# 读取当前配置的监听端口（取不到时默认 9443）
+get_listen_port() {
+    local p
+    p=$(grep -E '^\s*listen:' /etc/hysteria/config.yaml 2>/dev/null | grep -oE '[0-9]+' | head -1)
+    echo "${p:-9443}"
+}
+
+# 精确删除已有的端口跳跃规则：只删 PREROUTING 里 --to-ports 等于 hy2 监听端口的
+# REDIRECT 规则，其他 NAT 规则（例如别的服务做的重定向）一律不动。
+# （旧版用 -F 清空整条 PREROUTING，会误伤无关规则，这里修复。）
+delete_hop_rules() {
+    local tbl spec target
+    target=$(get_listen_port)
+    for tbl in iptables ip6tables; do
+        command -v "$tbl" >/dev/null 2>&1 || continue
+        # -S 输出形如：-A PREROUTING -p udp -m udp --dport 20000:40000 -j REDIRECT --to-ports 9443
+        $tbl -t nat -S PREROUTING 2>/dev/null | grep -- "--to-ports $target" | while read -r spec; do
+            $tbl -t nat $(echo "$spec" | sed 's/^-A /-D /') 2>/dev/null
+        done
+    done
+}
+
+# 保存 v4/v6 规则并设开机自启；保存失败返回非 0，不再静默吞掉
+save_iptables_rules() {
+    local ok=1
+    rc-service iptables save >/dev/null 2>&1 || ok=0
+    rc-update add iptables default >/dev/null 2>&1
+    if command -v ip6tables >/dev/null 2>&1; then
+        rc-service ip6tables save >/dev/null 2>&1 || ok=0
+        rc-update add ip6tables default >/dev/null 2>&1
+    fi
+    [ "$ok" = "1" ]
+}
+
+# 应用端口跳跃：先精确删除旧跳跃规则，再加新规则
+# IPv4 必须成功；IPv6 失败单独提示（无 v6 的机器不影响 v4）；最后保存并回显规则确认
+apply_hop_rules() {
+    local start=$1 end=$2 target=$3
+    delete_hop_rules
+    if ! iptables -t nat -A PREROUTING -p udp --dport "$start:$end" -j REDIRECT --to-port "$target"; then
+        echo -e "${PINK}IPv4 跳跃规则添加失败。${RESET}"
+        return 1
+    fi
+    if command -v ip6tables >/dev/null 2>&1 && ip6tables -t nat -A PREROUTING -p udp --dport "$start:$end" -j REDIRECT --to-port "$target" 2>/dev/null; then
+        echo -e "${GREEN}IPv6 跳跃规则已添加。${RESET}"
+    else
+        echo -e "${PINK}提示：IPv6 跳跃规则未添加（本机可能无 IPv6 或 ip6tables 不可用），不影响 IPv4。${RESET}"
+    fi
+    if ! save_iptables_rules; then
+        echo -e "${PINK}规则已生效，但保存持久化失败，重启后可能丢失，请检查 iptables 服务。${RESET}"
+        return 1
+    fi
+    echo -e "${GREEN}端口跳跃已生效并保存（UDP $start-$end -> $target），当前规则：${RESET}"
+    iptables -t nat -S PREROUTING 2>/dev/null | grep REDIRECT || true
+    ip6tables -t nat -S PREROUTING 2>/dev/null | grep REDIRECT || true
+}
+
+# 显示当前跳跃规则
+show_hop_rules() {
+    echo -e "${GREEN}当前 IPv4 跳跃规则：${RESET}"
+    iptables -t nat -S PREROUTING 2>/dev/null | grep REDIRECT || echo "（无）"
+    echo -e "${GREEN}当前 IPv6 跳跃规则：${RESET}"
+    ip6tables -t nat -S PREROUTING 2>/dev/null | grep REDIRECT || echo "（无）"
+}
+
+# 端口跳跃设置子菜单：查看 / 设置或修改 / 关闭，修改完即时生效并自动保存
+setup_port_hopping() {
+    while true; do
+        echo -e "${GREEN}====== 端口跳跃设置 ======${RESET}"
+        echo -e "${GREEN}1) 查看当前跳跃规则${RESET}"
+        echo -e "${GREEN}2) 设置/修改跳跃端口（IPv4+IPv6）${RESET}"
+        echo -e "${GREEN}3) 关闭端口跳跃${RESET}"
+        echo -e "${GREEN}0) 返回主菜单${RESET}"
+        read -p "$(echo -e "${PINK}请输入选项 (0-3): ${RESET}")" hop_opt
+        case $hop_opt in
+            1)
+                show_hop_rules
+                ;;
+            2)
+                local cur_target
+                cur_target=$(get_listen_port)
+                read -p "$(echo -e "${PINK}请输入跳跃端口范围的起始端口 (例如 20000): ${RESET}")" h_start
+                read -p "$(echo -e "${PINK}请输入跳跃端口范围的结束端口 (例如 40000): ${RESET}")" h_end
+                read -p "$(echo -e "${PINK}请输入目标端口 (直接回车默认当前监听端口 ${cur_target}): ${RESET}")" h_target
+                h_target=${h_target:-$cur_target}
+                if [[ ! "$h_start" =~ ^[0-9]+$ || ! "$h_end" =~ ^[0-9]+$ || ! "$h_target" =~ ^[0-9]+$ ]]; then
+                    echo -e "${PINK}输入无效，端口必须为数字。${RESET}"
+                elif [[ "$h_start" -ge "$h_end" ]]; then
+                    echo -e "${PINK}起始端口必须小于结束端口。${RESET}"
+                else
+                    apply_hop_rules "$h_start" "$h_end" "$h_target"
+                fi
+                ;;
+            3)
+                delete_hop_rules
+                if save_iptables_rules; then
+                    echo -e "${GREEN}端口跳跃已关闭并保存。${RESET}"
+                else
+                    echo -e "${PINK}规则已删除，但保存失败，请检查 iptables 服务。${RESET}"
+                fi
+                show_hop_rules
+                ;;
+            0)
+                return 0
+                ;;
+            *)
+                echo -e "${PINK}无效选项，请输入 0 到 3 的数字。${RESET}"
+                ;;
+        esac
+        echo -e "${GREEN}按任意键继续...${RESET}"
+        read -n 1 -s
+    done
+}
+
 # 生成随机 Gmail 邮箱地址
 generate_random_email() {
     local length=10
@@ -141,9 +255,10 @@ while true; do
     echo -e "${GREEN}7) 查看 Hysteria 日志${RESET}"
     echo -e "${GREEN}8) 立即更新 Hysteria 核心${RESET}"
     echo -e "${GREEN}9) 卸载 Hysteria${RESET}"
+    echo -e "${GREEN}10) 端口跳跃设置${RESET}"
     echo -e "${GREEN}0) 退出${RESET}"
 
-    read -p "$(echo -e "${PINK}请输入选项 (0-9): ${RESET}")" option
+    read -p "$(echo -e "${PINK}请输入选项 (0-10): ${RESET}")" option
 
     case $option in
         1)
@@ -245,25 +360,9 @@ EOF
                     exit 1
                 fi
 
-                # 清除旧的转发规则，防止规则重复堆叠
-                echo -e "${GREEN}正在清除旧的 NAT 转发规则...${RESET}"
-                iptables -t nat -F PREROUTING 2>/dev/null
-                ip6tables -t nat -F PREROUTING 2>/dev/null
-
-                # 设置 IPv4 与 IPv6 端口跳跃规则
+                # 设置端口跳跃（精确删除旧跳跃规则后重加，v4/v6 一并处理，加完回显确认并持久化）
                 echo -e "${GREEN}设置端口跳跃规则 ($START_PORT-$END_PORT -> $TARGET_PORT)...${RESET}"
-                iptables -t nat -A PREROUTING -p udp --dport "$START_PORT:$END_PORT" -j REDIRECT --to-port "$TARGET_PORT"
-                ip6tables -t nat -A PREROUTING -p udp --dport "$START_PORT:$END_PORT" -j REDIRECT --to-port "$TARGET_PORT" 2>/dev/null
-
-                # 保存规则至 Alpine 规则文件并加入自启
-                echo -e "${GREEN}正在保存 iptables 规则并设置开机自启...${RESET}"
-                rc-service iptables save 2>/dev/null
-                rc-service ip6tables save 2>/dev/null
-
-                rc-update add iptables default 2>/dev/null
-                rc-update add ip6tables default 2>/dev/null
-
-                echo -e "${GREEN}端口跳跃规则已成功设置并持久化。${RESET}"
+                apply_hop_rules "$START_PORT" "$END_PORT" "$TARGET_PORT"
             fi
 
             # 配置自动更新
@@ -348,15 +447,18 @@ EOF
             rm -f /usr/local/bin/hy2-install.sh
             rm -f /usr/local/bin/hy2-autoupdate.sh
             rm -f /var/log/hysteria.log /var/log/hysteria.err
-            # 修复：卸载时同步清除端口跳跃的 NAT 规则并保存
-            iptables -t nat -F PREROUTING 2>/dev/null
-            ip6tables -t nat -F PREROUTING 2>/dev/null
-            rc-service iptables save 2>/dev/null
-            rc-service ip6tables save 2>/dev/null
+            # 卸载时同步清除端口跳跃规则（只删 hy2 的 REDIRECT，不动其他 NAT 规则）并保存
+            delete_hop_rules
+            save_iptables_rules
             crontab -l 2>/dev/null | grep -v "hy2-autoupdate.sh" | crontab -
             echo -e "${GREEN}Hysteria 已成功完全卸载！${RESET}"
             echo -e "${GREEN}按任意键返回主菜单...${RESET}"
             read -n 1 -s
+            ;;
+
+        10)
+            check_and_install_iptables_tools
+            setup_port_hopping
             ;;
 
         0)
@@ -365,7 +467,7 @@ EOF
             ;;
 
         *)
-            echo -e "${PINK}无效选项，请输入 0 到 9 的数字。${RESET}"
+            echo -e "${PINK}无效选项，请输入 0 到 10 的数字。${RESET}"
             sleep 1
             ;;
     esac
