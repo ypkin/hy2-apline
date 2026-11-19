@@ -12,12 +12,30 @@ if ! grep -qi "alpine" /etc/os-release; then
 fi
 
 # 安装必要依赖组件（含 iptables/ip6tables 持久化组件与运行依赖）
+# 容错（2026-11-19 CC 实测）：apk 数据库损坏时（如 mkinitfs 安装状态损坏）
+# apk update/add 会报错，但所需依赖可能早已装齐——此时不应直接退出；
+# 先跑一次 apk fix 修复损坏状态并重试，仍失败则逐项核对，齐了就继续、缺了才退出。
 install_dependencies() {
     echo -e "${GREEN}正在更新软件源并安装依赖组件...${RESET}"
-    if ! apk update || ! apk add --no-cache curl socat wget iptables ip6tables bash nano tzdata ca-certificates; then
-        echo -e "${PINK}安装组件失败，请检查网络设置。${RESET}"
+    if apk update && apk add --no-cache curl socat wget iptables ip6tables bash nano tzdata ca-certificates; then
+        return 0
+    fi
+    echo -e "${PINK}apk 安装失败，尝试修复后重试...${RESET}"
+    apk fix >/dev/null 2>&1
+    apk update >/dev/null 2>&1
+    apk add --no-cache curl socat wget iptables ip6tables bash nano tzdata ca-certificates >/dev/null 2>&1 || true
+    local missing=""
+    for cmd in curl socat wget iptables ip6tables bash nano; do
+        command -v "$cmd" >/dev/null 2>&1 || missing="$missing $cmd"
+    done
+    for pkg in tzdata ca-certificates; do
+        apk info -e "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
+    done
+    if [ -n "$missing" ]; then
+        echo -e "${PINK}安装组件失败，仍缺少:$missing，请检查网络设置与 apk 状态。${RESET}"
         exit 1
     fi
+    echo -e "${GREEN}依赖检查通过（所需组件均已就绪），继续安装。${RESET}"
 }
 
 # 检查并自动补全 iptables 相关持久化插件
